@@ -186,6 +186,16 @@ const NOT_A_NAME = new Set(('and et y e и ve it ça ca lo la o open ouvre ouvri
   + '4d c4d fl studio ableton word excel powerpoint pdf mp4 mp3 png jpg jpeg zip rar 7z film films musique musiques music song songs '
   + 'audio présentation presentation diapo slides tableur spreadsheet dernier dernière derniers last latest récent récents recent '
   + 'nouveau new psd docx doc xlsx pptx blend list them').split(' '));
+const FOLDER_SCOPE = [
+  ['documents', /\bdocuments?\b|documentos|документ|belge\p{L}*/iu],
+  ['desktop', /\bbureau\b|\bdesktop\b|escritorio|[áa]rea de trabalho|рабоч\S* стол|masa[üu]st\p{L}*/iu],
+  ['downloads', /t[ée]l[ée]chargements?|downloads?|descargas|transfer[êe]ncias|загрузк|indirilen\p{L}*/iu],
+  ['pictures', /\bpictures\b|im[áa]genes|imagens|изображени|resim\p{L}*|foto[ğg]raf\p{L}*/iu],
+  ['music', /dossier (de )?musique|music folder|carpeta de m[úu]sica|pasta de m[úu]sica|папк\S* (с )?музык|m[üu]zik klas[öo]r\p{L}*/iu],
+  ['videos', /\bvid[ée]os?\b|v[íi]deos|видео|video\p{L}*/iu],
+];
+const LIST_ASK = /\b(list|all|every|show all)\b|listele|hepsini|t[üu]m[üu]n[üu]/i;
+
 // "…and open the folder", "…et ouvre-le": what to do with what she found
 const THEN_FOLDER = /(?:ouvre|ouvrir|open|show|montre|abre|abrir|открой|покажи)\s+(?:moi\s+)?(?:le |la |the |its |son |el |a |o )?(?:dossier|folder|carpeta|pasta|папку)/i;
 const THEN_OPEN = /(?:et|and|y|e|и)\s+(?:l['’])?(?:ouvre|open|lance|abre|открой)(?:[- ](?:le|la|les)|\s+(?:it|them|lo|la|o|его|её))?\s*[.!?]*$/i;
@@ -567,8 +577,9 @@ export class Chat {
     if (SEARCH_VERB.test(text) && (FILE_WORD.test(text) || exts.length)) {
       const extSet = new Set(exts);
       const query = searched(text).split(' ').filter((w) => w && !NOT_A_NAME.has(w) && !(w.startsWith('.') && extSet.has(w.slice(1)))).join(' ');
+      const folder = FOLDER_SCOPE.find(([, re]) => re.test(text))?.[0] || null;
       const then = THEN_FOLDER.test(text) ? 'folder' : THEN_OPEN.test(text) ? 'open' : null;
-      if (query || exts.length) return { kind: 'files', query, exts, then };
+      if (query || exts.length) return { kind: 'files', query, exts, folder, listAll: LIST_ASK.test(text), then };
     }
     const media = MEDIA_ASK.find(([, re]) => re.test(text))?.[0];
     if (media && (count <= 5 || MUSIC_WORD.test(text))) return { kind: 'media', action: media };
@@ -796,10 +807,11 @@ export class Chat {
       return (await this.host.webSearch(asked.query)) ? { line: fmt(t.web, { query: asked.query }), face: 'smug' } : null;
     }
     if (asked.kind === 'files') {
-      const results = await this.host.searchFiles({ query: asked.query, exts: asked.exts });
+      const results = await this.host.searchFiles({ query: asked.query, exts: asked.exts, folder: asked.folder });
       const asking = asked.query || asked.exts.map((e) => `.${e}`).join(' ');
       if (!results.length) return { line: fmt(t.filesNone, { query: asking }), face: 'aside' };
-      const list = results.slice(0, 3).map((f) => `${f.name} (${f.folder})`).join(', ');
+      const shown = asked.listAll ? results : results.slice(0, 3);
+      const list = shown.map((f) => `${f.name} (${f.folder})`).join(', ');
       const lines = [fmt(results.length === 1 ? t.fileFound : t.filesFound, { count: results.length, list })];
       // "…and open the folder" / "…and open it": done right away, on the newest one
       if (asked.then === 'folder' && (await this.host.openFile(results[0].path, true))) lines.push(fmt(t.folderOpened, { name: results[0].name }));

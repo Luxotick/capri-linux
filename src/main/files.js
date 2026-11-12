@@ -50,10 +50,12 @@ async function indexed(terms, exts) {
   return [...new Set(paths.map((l) => decodeURIComponent(l.slice(5)).replace(/\//g, '\\')))];
 }
 
-// The walk, when the index isn't there: your usual folders, a few levels down, by name and type.
-function walked(terms, exts) {
-  const roots = ['desktop', 'documents', 'downloads', 'pictures', 'music', 'videos'].map((k) => app.getPath(k));
-  const onedrive = process.env.OneDrive;
+const FOLDERS = new Set(['desktop', 'documents', 'downloads', 'pictures', 'music', 'videos']);
+
+// The walk, when the index isn't there: your usual folders (or the one asked for), a few levels down, by name and type.
+function walked(terms, exts, folder = null) {
+  const roots = FOLDERS.has(folder) ? [app.getPath(folder)] : [...FOLDERS].map((k) => app.getPath(k));
+  const onedrive = !FOLDERS.has(folder) && process.env.OneDrive;
   if (onedrive) roots.push(onedrive);
   const hits = [];
   const queue = [...new Set(roots)].map((dir) => [dir, 0]);
@@ -81,12 +83,12 @@ function walked(terms, exts) {
 
 // [{ path, name, folder }], the newest first, at most LIMIT. `query`: words of the name; `exts`:
 // the kinds of file it is (["aep"] for an After Effects project), when that's what was asked.
-async function search({ query = '', exts = [] } = {}) {
+async function search({ query = '', exts = [], folder = null } = {}) {
   const terms = words(query);
   if (!terms.length && !exts.length) return [];
-  const paths = await indexed(terms, exts);
-  const results = listed(paths?.length ? paths : walked(terms, exts));
-  return results.length || !paths?.length ? results : listed(walked(terms, exts));
+  const paths = FOLDERS.has(folder) ? null : await indexed(terms, exts);
+  const results = listed(paths?.length ? paths : walked(terms, exts, folder));
+  return results.length || !paths?.length ? results : listed(walked(terms, exts, folder));
 }
 
 function listed(paths) {
