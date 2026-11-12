@@ -67,7 +67,7 @@ const HER_PICK = /tu veux|ton choix|surprends|you want|whatever|your choice|surp
 const VAGUE_SONG = /^(?:(?:de\s+la|du|des|la|le|les|une?|some|a|the|un|algo\s+de|alguma|um|uma|что-нибудь)\s+)?(?:musique|music|son|sons|chanson|morceau|truc|quelque\s+chose|something|song|tunes?|m[úu]sica|canci[óo]n|algo|coisa|музыку|песню)?\s*[.!?]*$/iu;
 // "trouve mon CV", "où est le pdf du contrat", "find my report", "найди файл…": her search verbs, and
 // what makes it a file on your PC or a search on the web
-const SEARCH_VERB = /(?:cherche|recherche|trouve|retrouve|où (?:est|sont)|search(?: for)?|find|look (?:for|up)|where(?:'s| is| are)|busca|encuentra|d[óo]nde est[áa]n?|procura|acha|onde est[áa]o?|найди|поищи|где|ara(?:r m[ıi]s[ıi]n|sana)?|bul(?:ur musun)?|nerede)/i;
+const SEARCH_VERB = /(?:cherche|recherche|trouve|retrouve|où (?:est|sont)|combien|search(?: for)?|find|look (?:for|up)|where(?:'s| is| are)|how many|list|show(?: me)?|busca|encuentra|d[óo]nde est[áa]n?|cu[aá]nt|procura|acha|onde est[áa]o?|quant|найди|поищи|где|сколько|ara(?:r m[ıi]s[ıi]n|sana)?|bul(?:ur musun)?|nerede|ka[çc](?: tane)?|listele|g[öo]ster|var m[ıi])/i;
 const FILE_WORD = /fichier|dossier|document|photo|image|vid[ée]o|\bpdf\b|\bfiles?\b|folder|archivo|carpeta|arquivo|pasta|файл|папк|\.\w{2,4}\b|sur mon (?:pc|ordi)|dans mes fichiers|on my (?:pc|computer)|en mi (?:pc|ordenador)|no meu (?:pc|computador)|на (?:компьютере|пк)|dosya|klas[öo]r|belge|foto[ğg]raf|resim|bilgisayar[ıi]mda/i;
 const WEB_WORD = /google|internet|\ble web\b|the web|\bonline\b|en ligne|в интернете|в гугле|internette|webde|google['’]?da/i;
 // "fais une capture d'écran", "take a screenshot"
@@ -155,15 +155,16 @@ function left(ms) {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}` : `${Math.floor(s / 60)}:${two(s % 60)}`;
 }
 // the words that aren't what to look for
-const NOT_SEARCHED = new Set(('stp svp please pls peux tu can you could would puedes pode можешь moi me le la les l mon ma mes '
-  + 'un une des du de d the my a an for of from into about with all every list show them it el mi mis o meu minha meus мой мою мои '
+const NOT_SEARCHED = new Set(('stp svp please pls peux tu can you could would do have has how many list show give tell '
+  + 'puedes pode можешь moi me le la les l mon ma mes '
+  + 'un une des du de d the my a an for of from into about with all every them those these it el mi mis o meu minha meus мой мою мои '
   + 'sur dans on in en no na на в pc ordi ordinateur computer ordenador computador компьютере '
   + 'desktop documents downloads pictures music videos '
   + 'fichier fichiers dossier dossiers document documents photo photos image images '
   + 'vidéo vidéos video videos file files folder folders archivo archivos carpeta carpetas arquivo arquivos pasta pastas файл '
   + 'файлы папка папку appelé appelée nommé called named llamado chamado qui s appelle est sont is are where où cherche recherche '
   + 'trouve retrouve search find look up busca encuentra procura acha найди поищи где dónde onde google internet web online ligne').split(' '));
-const TR_NOT_SEARCHED = /^(?:dosya\p{L}*|klas[öo]r\p{L}*|belge\p{L}*|indirilen\p{L}*|masa[üu]st\p{L}*|resim\p{L}*|foto\p{L}*|m[üu]zi\p{L}*|video\p{L}*|bilgisayar\p{L}*|listele\p{L}*|g[öo]ster\p{L}*|ara\p{L}*|bul\p{L}*|nerede\p{L}*|bana|olan|t[üu]m|hepsi\p{L}*|i[çc]indeki\p{L}*|m[ıiuü]s[ıiuü]n|musun|l[üu]tfen)$/iu;
+const TR_NOT_SEARCHED = /^(?:dosya\p{L}*|klas[öo]r\p{L}*|belge\p{L}*|indirilen\p{L}*|masa[üu]st\p{L}*|resim\p{L}*|foto\p{L}*|m[üu]zi\p{L}*|video\p{L}*|bilgisayar\p{L}*|listele\p{L}*|g[öo]ster\p{L}*|ara\p{L}*|bul\p{L}*|nerede\p{L}*|bana|olan|t[üu]m\p{L}*|hepsi\p{L}*|i[çc]indeki\p{L}*|ka[çc]|tane|var|m[ıiuü]s[ıiuü]n|musun|l[üu]tfen)$/iu;
 // the kind of file asked for: "mon projet after effect" is a .aep
 const FILE_TYPES = [
   [/after ?effects?/i, ['aep']], [/premi[eè]re/i, ['prproj']], [/photoshop|\bpsd\b/i, ['psd']], [/illustrator/i, ['ai']],
@@ -194,7 +195,9 @@ const FOLDER_SCOPE = [
   ['music', /dossier (de )?musique|music folder|carpeta de m[úu]sica|pasta de m[úu]sica|папк\S* (с )?музык|m[üu]zik klas[öo]r\p{L}*/iu],
   ['videos', /\bvid[ée]os?\b|v[íi]deos|видео|video\p{L}*/iu],
 ];
-const LIST_ASK = /\b(list|all|every|show all)\b|listele|hepsini|t[üu]m[üu]n[üu]/i;
+const LIST_ASK = /\b(list|all|every|show all|how many)\b|listele|hepsini|t[üu]m[üu]n[üu]|ka[çc] tane/i;
+const FOLLOW_LIST_ASK = /\b(list|show|which|what are)\b|listele|g[öo]ster|hangileri|isimleri/i;
+const FOLLOW_REF = /\b(them|those|these|all|it)\b|onlar[ıi]|hepsini|bunlar[ıi]|hangileri/i;
 
 // "…and open the folder", "…et ouvre-le": what to do with what she found
 const THEN_FOLDER = /(?:ouvre|ouvrir|open|show|montre|abre|abrir|открой|покажи)\s+(?:moi\s+)?(?:le |la |the |its |son |el |a |o )?(?:dossier|folder|carpeta|pasta|папку)/i;
@@ -579,7 +582,13 @@ export class Chat {
       const query = searched(text).split(' ').filter((w) => w && !NOT_A_NAME.has(w) && !(w.startsWith('.') && extSet.has(w.slice(1)))).join(' ');
       const folder = FOLDER_SCOPE.find(([, re]) => re.test(text))?.[0] || null;
       const then = THEN_FOLDER.test(text) ? 'folder' : THEN_OPEN.test(text) ? 'open' : null;
-      if (query || exts.length) return { kind: 'files', query, exts, folder, listAll: LIST_ASK.test(text), then };
+      if (query || exts.length) {
+        this.lastFilesQuery = { kind: 'files', query, exts, folder, listAll: true, then: null };
+        return { kind: 'files', query, exts, folder, listAll: LIST_ASK.test(text), then };
+      }
+    }
+    if (this.lastFilesQuery && count <= 6 && FOLLOW_LIST_ASK.test(text) && FOLLOW_REF.test(text)) {
+      return { ...this.lastFilesQuery, listAll: true };
     }
     const media = MEDIA_ASK.find(([, re]) => re.test(text))?.[0];
     if (media && (count <= 5 || MUSIC_WORD.test(text))) return { kind: 'media', action: media };
@@ -807,7 +816,7 @@ export class Chat {
       return (await this.host.webSearch(asked.query)) ? { line: fmt(t.web, { query: asked.query }), face: 'smug' } : null;
     }
     if (asked.kind === 'files') {
-      const results = await this.host.searchFiles({ query: asked.query, exts: asked.exts, folder: asked.folder });
+      const results = await this.host.searchFiles({ query: asked.query, exts: asked.exts, folder: asked.folder, limit: asked.listAll ? 50 : 8 });
       const asking = asked.query || asked.exts.map((e) => `.${e}`).join(' ');
       if (!results.length) return { line: fmt(t.filesNone, { query: asking }), face: 'aside' };
       const shown = asked.listAll ? results : results.slice(0, 3);

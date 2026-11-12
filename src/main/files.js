@@ -53,14 +53,14 @@ async function indexed(terms, exts) {
 const FOLDERS = new Set(['desktop', 'documents', 'downloads', 'pictures', 'music', 'videos']);
 
 // The walk, when the index isn't there: your usual folders (or the one asked for), a few levels down, by name and type.
-function walked(terms, exts, folder = null) {
+function walked(terms, exts, folder = null, cap = LIMIT * 3) {
   const roots = FOLDERS.has(folder) ? [app.getPath(folder)] : [...FOLDERS].map((k) => app.getPath(k));
   const onedrive = !FOLDERS.has(folder) && process.env.OneDrive;
   if (onedrive) roots.push(onedrive);
   const hits = [];
   const queue = [...new Set(roots)].map((dir) => [dir, 0]);
   let seen = 0;
-  while (queue.length && hits.length < LIMIT * 3 && seen < 40000) {
+  while (queue.length && hits.length < cap && seen < 40000) {
     const [dir, depth] = queue.shift();
     let entries = [];
     try {
@@ -83,15 +83,16 @@ function walked(terms, exts, folder = null) {
 
 // [{ path, name, folder }], the newest first, at most LIMIT. `query`: words of the name; `exts`:
 // the kinds of file it is (["aep"] for an After Effects project), when that's what was asked.
-async function search({ query = '', exts = [], folder = null } = {}) {
+async function search({ query = '', exts = [], folder = null, limit = LIMIT } = {}) {
   const terms = words(query);
   if (!terms.length && !exts.length) return [];
+  const cap = Math.max(LIMIT, Number(limit) || LIMIT);
   const paths = FOLDERS.has(folder) ? null : await indexed(terms, exts);
-  const results = listed(paths?.length ? paths : walked(terms, exts, folder));
-  return results.length || !paths?.length ? results : listed(walked(terms, exts, folder));
+  const results = listed(paths?.length ? paths : walked(terms, exts, folder, Math.max(LIMIT * 3, cap)), cap);
+  return results.length || !paths?.length ? results : listed(walked(terms, exts, folder, Math.max(LIMIT * 3, cap)), cap);
 }
 
-function listed(paths) {
+function listed(paths, limit = LIMIT) {
   const results = paths.filter((p) => !junk(p)).map((p) => {
     let time = 0;
     try {
@@ -100,7 +101,7 @@ function listed(paths) {
       return null; // gone since
     }
     return { path: p, name: path.basename(p), folder: path.basename(path.dirname(p)), time };
-  }).filter(Boolean).sort((a, b) => b.time - a.time).slice(0, LIMIT);
+  }).filter(Boolean).sort((a, b) => b.time - a.time).slice(0, limit);
   for (const r of results) found.add(r.path);
   return results;
 }
