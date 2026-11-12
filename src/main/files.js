@@ -55,7 +55,10 @@ const FOLDERS = new Set(['desktop', 'documents', 'downloads', 'pictures', 'music
 // The walk, when the index isn't there: your usual folders (or the one asked for), a few levels down, by name and type.
 function walked(terms, exts, folder = null, cap = LIMIT * 3) {
   const roots = FOLDERS.has(folder) ? [app.getPath(folder)] : [...FOLDERS].map((k) => app.getPath(k));
-  const onedrive = !FOLDERS.has(folder) && process.env.OneDrive;
+  if (!FOLDERS.has(folder) && process.platform === 'linux' && terms.length) {
+    roots.push(path.join(app.getPath('home'), '.config'));
+  }
+  const onedrive = !FOLDERS.has(folder) && process.platform === 'win32' && process.env.OneDrive;
   if (onedrive) roots.push(onedrive);
   const hits = [];
   const queue = [...new Set(roots)].map((dir) => [dir, 0]);

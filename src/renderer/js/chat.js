@@ -68,7 +68,7 @@ const VAGUE_SONG = /^(?:(?:de\s+la|du|des|la|le|les|une?|some|a|the|un|algo\s+de
 // "trouve mon CV", "où est le pdf du contrat", "find my report", "найди файл…": her search verbs, and
 // what makes it a file on your PC or a search on the web
 const SEARCH_VERB = /(?:cherche|recherche|trouve|retrouve|où (?:est|sont)|combien|search(?: for)?|find|look (?:for|up)|where(?:'s| is| are)|how many|list|show(?: me)?|busca|encuentra|d[óo]nde est[áa]n?|cu[aá]nt|procura|acha|onde est[áa]o?|quant|найди|поищи|где|сколько|ara(?:r m[ıi]s[ıi]n|sana)?|bul(?:ur musun)?|nerede|ka[çc](?: tane)?|listele|g[öo]ster|var m[ıi])/i;
-const FILE_WORD = /fichier|dossier|document|photo|image|vid[ée]o|\bpdf\b|\bfiles?\b|folder|archivo|carpeta|arquivo|pasta|файл|папк|\.\w{2,4}\b|sur mon (?:pc|ordi)|dans mes fichiers|on my (?:pc|computer)|en mi (?:pc|ordenador)|no meu (?:pc|computador)|на (?:компьютере|пк)|dosya|klas[öo]r|belge|foto[ğg]raf|resim|bilgisayar[ıi]mda/i;
+const FILE_WORD = /fichier|dossier|document|photo|image|vid[ée]o|\bpdf\b|\bfiles?\b|folder|config|archivo|carpeta|arquivo|pasta|файл|папк|\.\w{2,4}\b|sur mon (?:pc|ordi)|dans mes fichiers|on my (?:pc|computer)|en mi (?:pc|ordenador)|no meu (?:pc|computador)|на (?:компьютере|пк)|dosya|klas[öo]r|belge|foto[ğg]raf|resim|ayar|bilgisayar[ıi]mda/i;
 const WEB_WORD = /google|internet|\ble web\b|the web|\bonline\b|en ligne|в интернете|в гугле|internette|webde|google['’]?da/i;
 // "fais une capture d'écran", "take a screenshot"
 const SHOT_ASK = /capture d['’][ée]cran|screenshot|screen ?shot|captura de (?:pantalla|tela)|скриншот|снимок экрана|ekran g[öo]r[üu]nt[üu]s[üu]|ekran resmi|\bss al\b/i;
@@ -186,7 +186,7 @@ const NOT_A_NAME = new Set(('and et y e и ve it ça ca lo la o open ouvre ouvri
   + 'projet projets project projects proyecto projeto проект proje after effect effects premiere pro photoshop illustrator blender cinema '
   + '4d c4d fl studio ableton word excel powerpoint pdf mp4 mp3 png jpg jpeg zip rar 7z film films musique musiques music song songs '
   + 'audio présentation presentation diapo slides tableur spreadsheet dernier dernière derniers last latest récent récents recent '
-  + 'nouveau new psd docx doc xlsx pptx blend list them').split(' '));
+  + 'nouveau new psd docx doc xlsx pptx blend list them config configs configuration ayar ayarlar ayarları').split(' '));
 const FOLDER_SCOPE = [
   ['documents', /\bdocuments?\b|documentos|документ|belge\p{L}*/iu],
   ['desktop', /\bbureau\b|\bdesktop\b|escritorio|[áa]rea de trabalho|рабоч\S* стол|masa[üu]st\p{L}*/iu],
