@@ -3,6 +3,7 @@
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
+const nodeNet = require('node:net');
 const { pathToFileURL } = require('node:url');
 const {
   app, BrowserWindow, Tray, Menu, ipcMain, screen, protocol, net, shell, globalShortcut, nativeImage,
@@ -144,11 +145,151 @@ function fitOverlay() {
   overlay.webContents.send('overlay:resize', { width: area.width, height: area.height, gap });
 }
 
+function getHyprCursor() {
+  const sig = process.env.HYPRLAND_INSTANCE_SIGNATURE;
+  if (!sig) return Promise.resolve(null);
+  const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`;
+  const sockPath = path.join(runtimeDir, 'hypr', sig, '.socket.sock');
+  return new Promise((resolve) => {
+    const client = nodeNet.createConnection(sockPath, () => client.write('cursorpos'));
+    let data = '';
+    client.on('data', (d) => { data += d; });
+    client.on('end', () => {
+      const parts = data.trim().split(',').map((s) => Number(s.trim()));
+      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        resolve({ x: parts[0], y: parts[1] });
+      } else {
+        resolve(null);
+      }
+    });
+    client.on('error', () => resolve(null));
+    setTimeout(() => { client.destroy(); resolve(null); }, 100);
+  });
+}
+
+let isCurrentInteractive = null;
+let isChatFocused = false;
+let isMenuOpen = false;
+let isMouseDown = false;
+let mouseDownTimer = null;
+
+function runHyprLua(fnBody) {
+  if (process.platform !== 'linux' || !process.env.HYPRLAND_INSTANCE_SIGNATURE) return;
+  const sig = process.env.HYPRLAND_INSTANCE_SIGNATURE;
+  const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`;
+  const sockPath = path.join(runtimeDir, 'hypr', sig, '.socket.sock');
+  const client = nodeNet.createConnection(sockPath, () => {
+    client.write(`dispatch function() ${fnBody} end`);
+  });
+  client.on('error', () => {});
+  setTimeout(() => client.destroy(), 150);
+}
+
+function hyprlandSyncCapriWorkspace() {
+  runHyprLua(
+    'local ws = hl.get_active_workspace(); ' +
+    'if ws then ' +
+      'for _, w in ipairs(hl.get_windows()) do ' +
+        'if w.class == "capri-desktop" and w.workspace and w.workspace.id ~= ws.id then ' +
+          'hl.dispatch(hl.dsp.window.move({ window = w, workspace = ws.id, follow = false })) ' +
+        'end ' +
+      'end ' +
+    'end'
+  );
+}
+
+function hyprlandSetNoFocus(noFocus) {
+  const val = noFocus ? '1' : '0';
+  runHyprLua(
+    'local ws = hl.get_active_workspace(); ' +
+    'for _, w in ipairs(hl.get_windows()) do ' +
+      'if w.class == "capri-desktop" then ' +
+        'if ws and w.workspace and w.workspace.id ~= ws.id then ' +
+          'hl.dispatch(hl.dsp.window.move({ window = w, workspace = ws.id, follow = false })) ' +
+        'end; ' +
+        `hl.dispatch(hl.dsp.window.set_prop({ window = w, prop = "no_focus", value = "${val}" })) ` +
+      'end ' +
+    'end'
+  );
+}
+
+function hyprlandUnfocusCapri() {
+  if (isChatFocused || isMenuOpen || isMouseDown) return;
+  runHyprLua(
+    'local aw = hl.get_active_window(); ' +
+    'local ws = hl.get_active_workspace(); ' +
+    'if ws then ' +
+      'for _, w in ipairs(hl.get_windows()) do ' +
+        'if w.class == "capri-desktop" and w.workspace and w.workspace.id ~= ws.id then ' +
+          'hl.dispatch(hl.dsp.window.move({ window = w, workspace = ws.id, follow = false })) ' +
+        'end ' +
+      'end ' +
+    'end; ' +
+    'if aw and aw.class == "capri-desktop" and ws then ' +
+      'local nw = hl.get_config("cursor:no_warps"); ' +
+      'hl.config({ cursor = { no_warps = true } }); ' +
+      'local lw = hl.get_last_window(); ' +
+      'if lw and lw.class ~= "capri-desktop" and lw.workspace and lw.workspace.id == ws.id then ' +
+        'hl.dispatch(hl.dsp.focus({ window = lw })) ' +
+      'else ' +
+        'for _, w in ipairs(hl.get_windows()) do ' +
+          'if w.class ~= "capri-desktop" and w.workspace and w.workspace.id == ws.id then ' +
+            'hl.dispatch(hl.dsp.focus({ window = w })); break ' +
+          'end ' +
+        'end ' +
+      'end; ' +
+      'hl.config({ cursor = { no_warps = nw } }) ' +
+    'end'
+  );
+}
+
+function hyprlandFocusCapri() {
+  runHyprLua(
+    'local ws = hl.get_active_workspace(); ' +
+    'local nw = hl.get_config("cursor:no_warps"); ' +
+    'hl.config({ cursor = { no_warps = true } }); ' +
+    'for _, w in ipairs(hl.get_windows()) do ' +
+      'if w.class == "capri-desktop" then ' +
+        'if ws and w.workspace and w.workspace.id ~= ws.id then ' +
+          'hl.dispatch(hl.dsp.window.move({ window = w, workspace = ws.id, follow = false })) ' +
+        'end; ' +
+        'hl.dispatch(hl.dsp.window.set_prop({ window = w, prop = "no_focus", value = "0" })); ' +
+        'hl.dispatch(hl.dsp.focus({ window = w })); break ' +
+      'end ' +
+    'end; ' +
+    'hl.config({ cursor = { no_warps = nw } })'
+  );
+}
+
+function setWindowInteractive(on) {
+  if (!overlay || overlay.isDestroyed()) return;
+  if (isCurrentInteractive === on) return;
+  isCurrentInteractive = on;
+  if (on) {
+    overlay.setIgnoreMouseEvents(false);
+    hyprlandSetNoFocus(false);
+  } else {
+    if (!isMenuOpen && !isChatFocused) {
+      overlay.setIgnoreMouseEvents(true);
+      hyprlandSetNoFocus(true);
+    }
+    hyprlandUnfocusCapri();
+  }
+}
+
 // The pointer reaches her click-through window through a mouse hook, and Windows drops a hook that
 // doesn't answer in time without a word (waking from sleep, a locked screen, a stall): she can't be
 // clicked anymore. Off then on puts in a new one; her place on top and her size are set again too.
 function rearmOverlay() {
   if (!overlay || overlay.isDestroyed()) return;
+  if (process.platform === 'linux') {
+    isCurrentInteractive = false;
+    overlay.setIgnoreMouseEvents(true);
+    if (!isMenuOpen && !isChatFocused) {
+      hyprlandSetNoFocus(true);
+    }
+    return;
+  }
   overlay.setIgnoreMouseEvents(false);
   overlay.setIgnoreMouseEvents(true, { forward: true });
   overlay.setAlwaysOnTop(true, 'screen-saver');
@@ -163,7 +304,7 @@ function raiseOverlay() {
   for (const wait of [0, 400]) {
     setTimeout(() => {
       if (!overlay || overlay.isDestroyed()) return;
-      overlay.setAlwaysOnTop(true, 'screen-saver');
+      overlay.setAlwaysOnTop(true, process.platform === 'win32' ? 'screen-saver' : 'floating');
       overlay.moveTop();
     }, wait);
   }
@@ -196,25 +337,25 @@ function createOverlay() {
     },
   });
 
-  overlay.setAlwaysOnTop(true, 'screen-saver');
-  overlay.setIgnoreMouseEvents(true, { forward: true });
+  overlay.setAlwaysOnTop(true, process.platform === 'win32' ? 'screen-saver' : 'floating');
+  overlay.setIgnoreMouseEvents(true);
   overlay.loadURL('capri://app/src/renderer/index.html');
   // always shown: put away, she's still there as her biochip in the corner. Sized again first:
   // Windows keeps a new window inside the work area, and resting on the taskbar it covers it too.
   overlay.once('ready-to-show', () => {
     fitOverlay();
     overlay.showInactive();
+    for (const delay of [500, 1200, 2000]) {
+      setTimeout(() => hyprlandUnfocusCapri(), delay);
+    }
   });
   overlay.webContents.on('render-process-gone', (_e, details) => {
     console.error('[capri] renderer gone:', details.reason);
   });
-  if (DEV) {
-    overlay.webContents.on('console-message', (e) => {
-      const { level, message, lineNumber, sourceId } = e;
-      console.log(`[renderer:${level}] ${message} (${String(sourceId).split('/').pop()}:${lineNumber})`);
-    });
-    if (process.env.CAPRI_DEVTOOLS) overlay.webContents.openDevTools({ mode: 'detach' });
-  }
+  overlay.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    console.log(`[renderer:${level}] ${message} (${String(sourceId).split('/').pop()}:${line})`);
+  });
+  if (DEV && process.env.CAPRI_DEVTOOLS) overlay.webContents.openDevTools({ mode: 'detach' });
 }
 
 function sendCommand(name, payload = {}) {
@@ -687,11 +828,30 @@ function createTray() {
 
 function registerIpc() {
   ipcMain.on('overlay:interactive', (_e, on) => {
-    overlay?.setIgnoreMouseEvents(!on, { forward: true });
+    setWindowInteractive(Boolean(on));
+  });
+  ipcMain.on('overlay:mousedown', (_e, on) => {
+    clearTimeout(mouseDownTimer);
+    isMouseDown = Boolean(on);
+    if (isMouseDown) {
+      mouseDownTimer = setTimeout(() => {
+        isMouseDown = false;
+        hyprlandUnfocusCapri();
+      }, 4000);
+    }
+  });
+  ipcMain.on('overlay:unfocus', () => {
+    hyprlandUnfocusCapri();
   });
   ipcMain.on('overlay:rearm', () => rearmOverlay()); // the pointer moved over her and she never heard of it
-  ipcMain.handle('overlay:cursor', () => {
-    const p = screen.getCursorScreenPoint();
+  ipcMain.handle('overlay:cursor', async () => {
+    let p = null;
+    if (process.platform === 'linux' && process.env.HYPRLAND_INSTANCE_SIGNATURE) {
+      p = await getHyprCursor().catch(() => null);
+    }
+    if (!p) {
+      p = screen.getCursorScreenPoint();
+    }
     const b = overlay.getBounds();
     const inside = p.x >= b.x && p.y >= b.y && p.x < b.x + b.width && p.y < b.y + b.height;
     return { x: p.x - b.x, y: p.y - b.y, inside, display: displayAt(p).id };
@@ -718,7 +878,21 @@ function registerIpc() {
   ipcMain.handle('config:set', (_e, patch) => updateConfig(patch));
   ipcMain.handle('demo:window', (_e, open) => demoWindow(open));
   // right-clicking her: the same menu as the tray icon (which Windows often hides behind the ^ by the clock)
-  ipcMain.on('menu:open', () => trayMenu?.popup({ window: overlay }));
+  ipcMain.on('menu:open', () => {
+    if (!trayMenu) return;
+    isMenuOpen = true;
+    trayMenu.popup({
+      window: overlay,
+      callback: () => {
+        isMenuOpen = false;
+        if (!isCurrentInteractive && !isChatFocused && overlay && !overlay.isDestroyed()) {
+          overlay.setIgnoreMouseEvents(true);
+          hyprlandSetNoFocus(true);
+        }
+        hyprlandUnfocusCapri();
+      },
+    });
+  });
   // her welcome panel's buttons
   ipcMain.handle('hooks:install', () => runHooks('install', { quiet: true }));
   ipcMain.handle('claude:found', () => fs.existsSync(path.dirname(activeHooks().status().file))); // Claude Code keeps its settings there
@@ -877,9 +1051,19 @@ function registerIpc() {
   // typing to her: the overlay takes the keyboard while the chat is open, and gives it back after
   ipcMain.on('overlay:focus', (_e, on) => {
     if (!overlay) return;
-    overlay.setFocusable(Boolean(on));
-    if (on) overlay.focus();
-    else overlay.blur();
+    isChatFocused = Boolean(on);
+    overlay.setFocusable(isChatFocused);
+    if (isChatFocused) {
+      overlay.focus();
+      hyprlandFocusCapri();
+    } else {
+      overlay.blur();
+      if (!isCurrentInteractive && !isMenuOpen) {
+        overlay.setIgnoreMouseEvents(true);
+        hyprlandSetNoFocus(true);
+      }
+      hyprlandUnfocusCapri();
+    }
   });
   // her report card's copy button: a picture of that part of the overlay, on the clipboard
   ipcMain.handle('panel:copy', async (_e, rect) => {
@@ -1055,6 +1239,7 @@ function main() {
     createTray();
     windowWatch = startWindowWatch({
       overlay,
+      onCapriFocused: () => hyprlandUnfocusCapri(),
       onUpdate: (data) => {
         // a click on the taskbar brings it up over her: sitting on it, her legs would vanish behind it
         if (data.taskbar && !lastWindows?.taskbar && config.load().rest === 'taskbar') raiseOverlay();

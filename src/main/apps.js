@@ -4,14 +4,31 @@
 // a window, by name; closing one the way its own close button does (it can still ask you to save),
 // and only if you ask again, forcing it. Windows only.
 
+const path = require('node:path');
+const net = require('node:net');
 const { execFile } = require('node:child_process');
 
 // never these: the desktop itself, Windows' own pieces, her (Capri), Claude (she watches it) and
 // Ollama (she talks through it)
 const KEEP = new Set([
   'explorer', 'applicationframehost', 'textinputhost', 'shellexperiencehost', 'startmenuexperiencehost',
-  'searchhost', 'searchapp', 'lockapp', 'dwm', 'capri', 'electron', 'claude', 'codex', 'ollama', 'ollama app',
+  'searchhost', 'searchapp', 'lockapp', 'dwm', 'capri', 'capri-desktop', 'electron', 'claude', 'codex', 'ollama', 'ollama app',
 ]);
+
+function hyprRequest(cmd) {
+  const sig = process.env.HYPRLAND_INSTANCE_SIGNATURE;
+  if (!sig) return Promise.reject(new Error('no hyprland'));
+  const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`;
+  const sockPath = path.join(runtimeDir, 'hypr', sig, '.socket.sock');
+  return new Promise((resolve, reject) => {
+    const client = net.createConnection(sockPath, () => client.write(cmd));
+    const chunks = [];
+    client.on('data', (d) => chunks.push(d));
+    client.on('end', () => resolve(Buffer.concat(chunks).toString()));
+    client.on('error', reject);
+    setTimeout(() => { client.destroy(); reject(new Error('timeout')); }, 1500);
+  });
+}
 
 function powershell(script, timeout = 15000) {
   return new Promise((resolve, reject) => {
@@ -24,6 +41,20 @@ function powershell(script, timeout = 15000) {
 
 // [{ name, process, ids }]: one per program with a window open ("AM Music", "Discord"...)
 async function list() {
+  if (process.platform === 'linux' && process.env.HYPRLAND_INSTANCE_SIGNATURE) {
+    const raw = await hyprRequest('j/clients').catch(() => '[]');
+    const clients = JSON.parse(raw);
+    const apps = new Map();
+    for (const c of clients) {
+      if (!c.mapped || c.hidden || !c.class) continue;
+      if (c.pid === process.pid || KEEP.has(c.class.toLowerCase())) continue;
+      const app = apps.get(c.class) || { name: c.class, process: c.class, label: c.title || c.class, ids: [], addresses: [] };
+      if (c.pid && !app.ids.includes(c.pid)) app.ids.push(c.pid);
+      if (c.address) app.addresses.push(c.address);
+      apps.set(c.class, app);
+    }
+    return [...apps.values()];
+  }
   if (process.platform !== 'win32') return [];
   const out = await powershell(
     'Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | '
@@ -64,6 +95,21 @@ async function find(wanted) {
 async function close(name, { force = false } = {}) {
   const app = (await list()).find((a) => a.process === name);
   if (!app) return { running: false };
+  if (process.platform === 'linux' && process.env.HYPRLAND_INSTANCE_SIGNATURE) {
+    if (force) {
+      for (const pid of app.ids) {
+        try { process.kill(pid, 'SIGKILL'); } catch {}
+      }
+      await new Promise((r) => setTimeout(r, 600));
+    } else {
+      for (const addr of app.addresses || []) {
+        await hyprRequest(`dispatch closewindow address:${addr}`).catch(() => {});
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    const still = (await list()).some((a) => a.process === name);
+    return { running: still };
+  }
   const ids = app.ids.join(',');
   const out = await powershell(force
     ? `Stop-Process -Id ${ids} -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 600; `

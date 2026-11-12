@@ -11,13 +11,186 @@
 
 const path = require('node:path');
 const readline = require('node:readline');
+const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { screen } = require('electron');
 
 // in the installed app it sits next to the app archive (asarUnpack), where PowerShell can read it
 const SCRIPT = path.join(__dirname, 'windows.ps1').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
-function startWindowWatch({ overlay, onUpdate }) {
+function startHyprlandWatch({ overlay, onUpdate, onCapriFocused }) {
+  const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`;
+  const sig = process.env.HYPRLAND_INSTANCE_SIGNATURE;
+  if (!sig) return { stop() {}, refresh() {}, close: async () => 'gone' };
+
+  const cmdSock = path.join(runtimeDir, 'hypr', sig, '.socket.sock');
+  const eventSock = path.join(runtimeDir, 'hypr', sig, '.socket2.sock');
+
+  let stopped = false;
+  let eventClient = null;
+  let pollTimer = null;
+  let debounceTimer = null;
+
+  function request(cmd) {
+    return new Promise((resolve, reject) => {
+      const client = net.createConnection(cmdSock, () => client.write(cmd));
+      const chunks = [];
+      client.on('data', (d) => chunks.push(d));
+      client.on('end', () => resolve(Buffer.concat(chunks).toString()));
+      client.on('error', reject);
+      setTimeout(() => { client.destroy(); reject(new Error('timeout')); }, 1000);
+    });
+  }
+
+  async function update() {
+    if (stopped || !overlay || overlay.isDestroyed()) return;
+    try {
+      const [clientsRaw, activeRaw, wsRaw] = await Promise.all([
+        request('j/clients'),
+        request('j/activewindow'),
+        request('j/activeworkspace'),
+      ]);
+      const clients = JSON.parse(clientsRaw);
+      const active = JSON.parse(activeRaw);
+      const activeWs = JSON.parse(wsRaw);
+
+      const capriWin = clients.find((c) => c.class === 'capri-desktop');
+      if (capriWin && activeWs?.id && capriWin.workspace?.id !== activeWs.id) {
+        syncCapriWorkspace();
+      }
+      if (active.class === 'capri-desktop') {
+        onCapriFocused?.();
+      }
+
+      let fg = active.class === 'capri-desktop' ? null : active.address;
+      if (!fg) {
+        const sorted = clients
+          .filter((c) => c.class !== 'capri-desktop' && (c.workspace?.id === activeWs.id || c.pinned))
+          .sort((a, b) => a.focusHistoryID - b.focusHistoryID);
+        if (sorted.length > 0) fg = sorted[0].address;
+      }
+
+      const bounds = overlay.getBounds();
+      const wins = [];
+      const ai = [];
+      let game = null;
+
+      for (const c of clients) {
+        if (!c.mapped || c.hidden || c.class === 'capri-desktop') continue;
+        if (c.workspace?.id !== activeWs.id && !c.pinned) continue;
+
+        const x = c.at[0] - bounds.x;
+        const y = c.at[1] - bounds.y;
+        const w = c.size[0];
+        const h = c.size[1];
+
+        if (x < bounds.width && x + w > 0 && y < bounds.height && y + h > 0) {
+          wins.push({
+            id: c.address,
+            x,
+            y,
+            w,
+            h,
+            max: c.fullscreen !== 0,
+          });
+        }
+
+        const cls = (c.class || '').toLowerCase();
+        const title = (c.title || '').toLowerCase();
+        if (cls.includes('chatgpt') || title.includes('chatgpt')) ai.push('chatgpt');
+        if (cls.includes('claude') || title.includes('claude')) ai.push('claude');
+        if (cls.includes('gemini') || title.includes('gemini')) ai.push('gemini');
+        if (cls.startsWith('steam_app_') || cls.includes('deadlock')) game = c.title;
+      }
+
+      onUpdate({
+        fg,
+        taskbar: false,
+        ai,
+        pages: [],
+        dl: false,
+        game,
+        usb: [],
+        plug: null,
+        wins,
+      });
+    } catch {
+      // transient parse error during rapid state change
+    }
+  }
+
+  function scheduleUpdate() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(update, 50);
+  }
+
+  function syncCapriWorkspace() {
+    request(
+      'dispatch function() local ws = hl.get_active_workspace(); if ws then for _, w in ipairs(hl.get_windows()) do if w.class == "capri-desktop" and w.workspace and w.workspace.id ~= ws.id then hl.dispatch(hl.dsp.window.move({ window = w, workspace = ws.id, follow = false })) end end end end'
+    ).catch(() => {});
+  }
+
+  function connectEvents() {
+    if (stopped) return;
+    try {
+      eventClient = net.createConnection(eventSock);
+      readline.createInterface({ input: eventClient }).on('line', (line) => {
+        if (line.startsWith('workspace>>') || line.startsWith('focusedmon>>')) {
+          syncCapriWorkspace();
+        }
+        if (line.startsWith('activewindow>>capri-desktop')) {
+          setTimeout(() => onCapriFocused?.(), 40);
+        }
+        if (
+          line.startsWith('workspace>>') ||
+          line.startsWith('focusedmon>>') ||
+          line.startsWith('activewindow>>') ||
+          line.startsWith('movewindow>>') ||
+          line.startsWith('openwindow>>') ||
+          line.startsWith('closewindow>>') ||
+          line.startsWith('fullscreen>>') ||
+          line.startsWith('changefloatingmode>>')
+        ) {
+          scheduleUpdate();
+        }
+      });
+      eventClient.on('error', () => {});
+      eventClient.on('close', () => {
+        if (!stopped) setTimeout(connectEvents, 2000);
+      });
+    } catch {
+      if (!stopped) setTimeout(connectEvents, 2000);
+    }
+  }
+
+  connectEvents();
+  pollTimer = setInterval(update, 2000);
+  update();
+
+  return {
+    stop() {
+      stopped = true;
+      clearTimeout(debounceTimer);
+      clearInterval(pollTimer);
+      eventClient?.destroy();
+    },
+    refresh: update,
+    async close(id) {
+      if (!id) return 'gone';
+      try {
+        await request(`dispatch closewindow address:${id}`);
+        return '';
+      } catch {
+        return 'gone';
+      }
+    },
+  };
+}
+
+function startWindowWatch({ overlay, onUpdate, onCapriFocused }) {
+  if (process.platform === 'linux' && process.env.HYPRLAND_INSTANCE_SIGNATURE) {
+    return startHyprlandWatch({ overlay, onUpdate, onCapriFocused });
+  }
   if (process.platform !== 'win32') return { stop() {}, refresh() {}, close: async () => 'windows' };
 
   let child = null;

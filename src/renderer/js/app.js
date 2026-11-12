@@ -113,13 +113,25 @@ async function boot() {
     host.setInteractive(on);
   };
   const onChip = () => Boolean(chip.visible && mouse && chip.contains(mouse.x, mouse.y, 0));
+  const isOverCapri = (x, y) => {
+    if (capri.hidden) return false;
+    const r = panel.rect();
+    if (r && x >= r.left - 5 && x <= r.right + 5 && y >= r.top - 5 && y <= r.bottom + 5) return true;
+    if (chip.visible && chip.contains(x, y, 0)) return true;
+    if (mask.visible && mask.contains(x, y, 30)) return true;
+    if (capri.hit(x, y)) return true;
+    const s = capri.scale || 0.6;
+    const feet = capri.pos;
+    if (!feet) return false;
+    const halfW = 75 * s;
+    const height = 240 * s;
+    return x >= feet.x - halfW && x <= feet.x + halfW && y >= feet.y - height && y <= feet.y + 5;
+  };
   const refreshHit = () => {
     if (capri.dragging) return setInteractive(true);
     if (!mouse) return setInteractive(false);
-    const r = panel.rect();
-    const onPanel = r && mouse.x >= r.left && mouse.x <= r.right && mouse.y >= r.top && mouse.y <= r.bottom;
     document.body.style.cursor = onChip() ? 'pointer' : '';
-    return setInteractive(Boolean(onPanel || capri.hit(mouse.x, mouse.y) || onChip()));
+    return setInteractive(isOverCapri(mouse.x, mouse.y));
   };
   // Her biochip: her eyes on it follow the pointer over it, and she comes out when you click it
   // (only then, so the pointer passing through that corner doesn't call her back).
@@ -150,41 +162,46 @@ async function boot() {
     if (now - lastMove > AWAY_MS) onBack?.(now - lastMove);
     lastMove = now;
     mouse = { x: e.clientX, y: e.clientY };
-    refreshHit();
+    if (interactive && !capri.dragging && !isOverCapri(e.clientX, e.clientY)) {
+      setInteractive(false);
+    }
     hoverChip();
   });
-  document.addEventListener('mouseleave', () => {
-    mouse = null;
-    refreshHit();
-    hoverChip();
+  window.addEventListener('mousedown', () => {
+    host.setMouseDown(true);
   });
-  // Where the pointer really is, every couple of seconds: if it moved over her window and no
-  // mousemove came, the hook that brings it to her is gone (Windows drops it without a word, after
-  // sleep say), and main.js puts in a new one.
+  window.addEventListener('mouseup', () => {
+    host.setMouseDown(false);
+    setTimeout(() => {
+      if (!chat.open && !capri.dragging) host.unfocus();
+    }, 40);
+  });
+  // Track cursor position from host and dynamically toggle click-through:
+  // ONLY interactive when the pointer is on Capri, her panel or biochip!
   let seen = null;
-  let rearmedAt = -Infinity;
   let follow = null; // (pointer) => she may follow it to another screen (below)
   setInterval(async () => {
     const at = await host.cursor().catch(() => null);
-    const before = seen;
     seen = at;
     follow?.(at);
-    if (!at?.inside) return;
-    const now = performance.now();
-    // the pointer is on her and she isn't clickable (its moves stopped reaching her): she is now
-    if (!interactive && now - lastMove > WATCH_MS) {
-      mouse = { x: at.x, y: at.y };
-      refreshHit();
+    if (!at?.inside) {
+      if (interactive && !capri.dragging) setInteractive(false);
+      return;
     }
-    if (!before?.inside || (at.x === before.x && at.y === before.y)) return;
-    if (now - lastMove < WATCH_MS * 1.5 || now - rearmedAt < 20000) return;
-    rearmedAt = now;
-    host.rearm();
-  }, WATCH_MS);
-  window.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    if (chip.visible && chip.contains(e.clientX, e.clientY, 0)) host.openMenu();
-  });
+    const shouldBeInteractive = Boolean(capri.dragging || isOverCapri(at.x, at.y));
+
+    if (shouldBeInteractive) {
+      mouse = { x: at.x, y: at.y };
+      setInteractive(true);
+      hoverChip();
+    } else {
+      if (interactive && !capri.dragging) {
+        mouse = null;
+        setInteractive(false);
+        hoverChip();
+      }
+    }
+  }, 35);
   window.addEventListener('click', (e) => {
     if (chip.visible && chip.contains(e.clientX, e.clientY, 0)) comeOut();
   });
@@ -193,8 +210,6 @@ async function boot() {
   capri.onMove = (head) => {
     // pointing at something: the panel goes on her other side, so it doesn't cover it
     panel.setAnchor({ ...head, lean: capri.pointing ? -capri.pointing.dir : 0 }, capri.view);
-    // she may have moved out from under a still pointer: never leave a dead click zone behind
-    refreshHit();
   };
   capri.onTeleport = (phase) => (phase === 'start' ? panel.suspend() : panel.resume());
   capri.chipAt = () => chip.center();

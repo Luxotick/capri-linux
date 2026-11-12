@@ -8,7 +8,7 @@
 
 const fs = require('node:fs');
 const os = require('node:os');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { shell, screen } = require('electron');
 const apps = require('./apps');
 const upkeep = require('./upkeep');
@@ -39,17 +39,30 @@ async function settings(page) {
 // your network (not the internet's idea of it: that would mean asking a website).
 async function info(what) {
   if (what === 'battery') {
-    const out = WIN && await apps.powershell('Get-CimInstance Win32_Battery | Select-Object -First 1 EstimatedChargeRemaining, BatteryStatus | ConvertTo-Json -Compress').catch(() => '');
+    if (!WIN) {
+      try {
+        const supplies = fs.readdirSync('/sys/class/power_supply');
+        const bat = supplies.find((s) => /^BAT/i.test(s));
+        if (!bat) return { none: true };
+        const base = `/sys/class/power_supply/${bat}`;
+        const percent = Number.parseInt(fs.readFileSync(`${base}/capacity`, 'utf8'), 10);
+        const status = fs.readFileSync(`${base}/status`, 'utf8').trim().toLowerCase();
+        return Number.isFinite(percent) ? { percent, charging: status === 'charging' || status === 'full' } : { none: true };
+      } catch {
+        return { none: true };
+      }
+    }
+    const out = await apps.powershell('Get-CimInstance Win32_Battery | Select-Object -First 1 EstimatedChargeRemaining, BatteryStatus | ConvertTo-Json -Compress').catch(() => '');
     if (!out) return { none: true };
     const b = JSON.parse(out);
     // BatteryStatus: 1 on battery; 2 on the charger; 3 full; 6 to 9 charging
     return { percent: b.EstimatedChargeRemaining, charging: [2, 3, 6, 7, 8, 9].includes(b.BatteryStatus) };
   }
   if (what === 'disk') {
-    const drive = `${process.env.SystemDrive || 'C:'}\\`;
+    const drive = WIN ? `${process.env.SystemDrive || 'C:'}\\` : '/';
     try {
       const s = fs.statfsSync(drive);
-      return { drive: drive.slice(0, 2), free: s.bavail * s.bsize, total: s.blocks * s.bsize };
+      return { drive: WIN ? drive.slice(0, 2) : '/', free: s.bavail * s.bsize, total: s.blocks * s.bsize };
     } catch {
       return null;
     }
@@ -101,6 +114,22 @@ public static class CapriAudio {
 
 // { level } (0 to 100, unmuted too), { mute: true | false }, or neither: the level now
 async function volume({ level = null, mute = null } = {}) {
+  if (process.platform === 'linux') {
+    if (Number.isFinite(level)) {
+      const pct = Math.round(Math.min(100, Math.max(0, level)));
+      await run('wpctl', ['set-volume', '@DEFAULT_AUDIO_SINK@', `${pct}%`]);
+      await run('wpctl', ['set-mute', '@DEFAULT_AUDIO_SINK@', '0']);
+    } else if (typeof mute === 'boolean') {
+      await run('wpctl', ['set-mute', '@DEFAULT_AUDIO_SINK@', mute ? '1' : '0']);
+    }
+    return new Promise((resolve) => {
+      execFile('wpctl', ['get-volume', '@DEFAULT_AUDIO_SINK@'], { timeout: 5000 }, (err, out) => {
+        if (err) return resolve(null);
+        const m = /Volume:\s*([\d.]+)/.exec(String(out));
+        resolve(m ? { level: Math.round(Number(m[1]) * 100) } : null);
+      });
+    });
+  }
   if (!WIN) return null;
   let line = '';
   if (Number.isFinite(level)) line = `[CapriAudio]::Set(${Math.round(Math.min(100, Math.max(0, level)))}); [CapriAudio]::Mute($false); `;
@@ -112,6 +141,10 @@ async function volume({ level = null, mute = null } = {}) {
 
 // Windows' own snip: you pick the area, it lands in your clipboard.
 async function snip() {
+  if (process.platform === 'linux') {
+    spawn('sh', ['-c', 'grim -g "$(slurp)" - | wl-copy'], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
+    return true;
+  }
   if (!WIN) return false;
   await shell.openExternal('ms-screenclip:');
   return true;
@@ -163,6 +196,14 @@ async function theme(dark) {
 
 // Lock, sleep, or shut down / restart in `seconds` (Windows' own countdown: 'cancel' stops it).
 async function power(action, seconds = 60) {
+  if (process.platform === 'linux') {
+    if (action === 'lock') return run('loginctl', ['lock-session']);
+    if (action === 'sleep') return run('systemctl', ['suspend']);
+    if (action === 'shutdown') return run('shutdown', ['-h', `+${Math.max(1, Math.round(seconds / 60))}`]);
+    if (action === 'restart') return run('shutdown', ['-r', `+${Math.max(1, Math.round(seconds / 60))}`]);
+    if (action === 'cancel') return run('shutdown', ['-c']);
+    return false;
+  }
   if (!WIN) return false;
   const s = String(Math.round(Math.min(315360000, Math.max(0, seconds))));
   if (action === 'lock') return run('rundll32.exe', ['user32.dll,LockWorkStation']);

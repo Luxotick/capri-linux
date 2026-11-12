@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('host', {
   onResize: on('overlay:resize'),
   onWindows: on('windows:update'),
   setInteractive: (on) => ipcRenderer.send('overlay:interactive', Boolean(on)),
+  setMouseDown: (on) => ipcRenderer.send('overlay:mousedown', Boolean(on)),
+  unfocus: () => ipcRenderer.send('overlay:unfocus'),
   rearm: () => ipcRenderer.send('overlay:rearm'),
   cursor: () => ipcRenderer.invoke('overlay:cursor'),
   screens: () => ipcRenderer.invoke('screens:list'),

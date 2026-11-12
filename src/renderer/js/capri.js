@@ -1844,12 +1844,19 @@ export class Capri {
 
   bindPointer() {
     let down = null;
+    const canCatch = (x, y) => {
+      if (this.hit(x, y)) return true;
+      const s = this.scale || 0.6;
+      const feet = this.pos;
+      if (!feet) return false;
+      return x >= feet.x - 75 * s && x <= feet.x + 75 * s && y >= feet.y - 240 * s && y <= feet.y + 5;
+    };
     this.canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      if (this.hit(e.clientX, e.clientY)) this.onMenu?.(); // right-click: her menu
+      if (canCatch(e.clientX, e.clientY)) this.onMenu?.(); // right-click: her menu
     });
     this.canvas.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || !this.hit(e.clientX, e.clientY)) return;
+      if (e.button !== 0 || !canCatch(e.clientX, e.clientY)) return;
       // thrown: you can catch her on the fly, or pick her up off the floor
       const thrown = this.stance === 'fly' || this.stance === 'down';
       if (this.busy && !thrown) return;

@@ -16,7 +16,7 @@ const words = (query) => String(query || '').toLowerCase().normalize('NFKD').rep
   .split(/[^\p{L}\p{N}.]+/u).filter((w) => w.length >= 2).slice(0, 5);
 
 // never in the results: code dependencies, app data, git internals
-const JUNK = ['node_modules', '\\AppData\\', '\\.git\\', '\\site-packages\\', '\\$Recycle.Bin\\'];
+const JUNK = ['node_modules', '\\AppData\\', '\\.git\\', '/.git/', '/.cache/', '\\site-packages\\', '\\$Recycle.Bin\\'];
 const junk = (p) => JUNK.some((j) => p.includes(j));
 // files that are code, left out of a search by what's inside (any word shows up in some library)
 const CODE = ['js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'json', 'map', 'lock', 'yml', 'yaml', 'py', 'css', 'html', 'md', 'txt', 'xml', 'log'];
@@ -24,6 +24,7 @@ const CODE = ['js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'json', 'map', 'lock', 'ym
 // Windows Search: names first (every word in the name, of one of `exts` if any), then what's in
 // documents (not code). null if the index can't be asked.
 async function indexed(terms, exts) {
+  if (process.platform !== 'win32') return null;
   const safe = terms.map((t) => t.replace(/[^\p{L}\p{N}.]/gu, '')).filter(Boolean);
   const types = exts.map((e) => e.replace(/[^a-z0-9]/gi, '')).filter(Boolean);
   if (!safe.length && !types.length) return [];

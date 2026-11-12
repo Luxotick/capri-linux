@@ -24,10 +24,58 @@ let cache = null; // { at, items }
 const plain = (text) => String(text || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 const words = (text) => plain(text).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2);
 
-// Everything she can open: [{ name, kind: 'app' | 'steam' | 'epic', id }]
+const LINUX = process.platform === 'linux';
+
+function linuxDesktopApps() {
+  const dirs = [
+    path.join(app.getPath('home'), '.local', 'share', 'applications'),
+    '/usr/local/share/applications',
+    '/usr/share/applications',
+    path.join(app.getPath('home'), '.local', 'share', 'flatpak', 'exports', 'share', 'applications'),
+    '/var/lib/flatpak/exports/share/applications',
+  ];
+  const items = [];
+  for (const dir of dirs) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const file of entries) {
+      if (!file.endsWith('.desktop')) continue;
+      try {
+        const raw = fs.readFileSync(path.join(dir, file), 'utf8');
+        const entry = raw.split(/^\[Desktop Entry\]/m)[1]?.split(/^\[/m)[0];
+        if (!entry) continue;
+        if (/^NoDisplay\s*=\s*true/mi.test(entry) || /^Hidden\s*=\s*true/mi.test(entry)) continue;
+        if (!/^Type\s*=\s*Application/mi.test(entry)) continue;
+        const name = /^Name\s*=\s*(.+)$/m.exec(entry)?.[1]?.trim();
+        const execLine = /^Exec\s*=\s*(.+)$/m.exec(entry)?.[1]?.trim();
+        if (name && execLine) {
+          items.push({ name, kind: 'desktop', id: file, exec: execLine });
+        }
+      } catch {
+        // skip unreadable desktop file
+      }
+    }
+  }
+  return items;
+}
+
+function linuxSteamRoot() {
+  const home = app.getPath('home');
+  const candidates = [
+    path.join(home, '.local', 'share', 'Steam'),
+    path.join(home, '.steam', 'steam'),
+    path.join(home, '.var', 'app', 'com.valvesoftware.Steam', '.local', 'share', 'Steam'),
+  ];
+  return candidates.find((p) => fs.existsSync(path.join(p, 'steamapps'))) || null;
+}
+
+// Everything she can open: [{ name, kind: 'app' | 'desktop' | 'steam' | 'epic', id }]
 async function launchables() {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.items;
-  if (!WIN) return [];
   const items = [];
   const seen = new Set();
   const add = (item) => {
@@ -36,6 +84,13 @@ async function launchables() {
     seen.add(key);
     items.push(item);
   };
+  if (LINUX) {
+    for (const game of steamGames(linuxSteamRoot())) add(game);
+    for (const entry of linuxDesktopApps()) add(entry);
+    cache = { at: Date.now(), items };
+    return items;
+  }
+  if (!WIN) return [];
   // games first: a game's own entry wins over a shortcut to it
   for (const game of [...steamGames(await steamRoot()), ...epicGames()]) add(game);
   // the Start menu's list is slow the first time (PowerShell starting cold): main.js asks for it early
@@ -172,6 +227,11 @@ function knownFolder(text) {
 }
 
 function openKnown(id) {
+  if (LINUX) {
+    if (id === 'explorer') return shell.openPath(app.getPath('home'));
+    if (id === 'recycle') return shell.openExternal('trash:///');
+    return shell.openPath(app.getPath(id));
+  }
   if (id === 'explorer') return spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
   if (id === 'recycle') return spawn('explorer.exe', ['shell:RecycleBinFolder'], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
   return shell.openPath(app.getPath(id));
@@ -201,6 +261,18 @@ async function launch({ kind, id } = {}) {
   if (!item) throw new Error('not found');
   if (kind === 'steam') return shell.openExternal(`steam://rungameid/${id}`);
   if (kind === 'epic') return shell.openExternal(`com.epicgames.launcher://apps/${encodeURIComponent(id)}?action=launch&silent=true`);
+  if (kind === 'desktop') {
+    const child = spawn('gtk-launch', [id], { detached: true, stdio: 'ignore' });
+    child.on('error', () => {
+      const cleanExec = String(item.exec || '').replace(/%[fFuUdDnNickvm]/g, '').trim();
+      if (cleanExec) {
+        const parts = cleanExec.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((s) => s.replace(/^"|"$/g, '')) || [];
+        if (parts[0]) spawn(parts[0], parts.slice(1), { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
+      }
+    });
+    child.unref();
+    return undefined;
+  }
   spawn('explorer.exe', [`shell:AppsFolder\\${id}`], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
   return undefined;
 }
@@ -212,7 +284,23 @@ const MEDIA = { pause: [0xb3, 1], play: [0xb3, 1], next: [0xb0, 1], previous: [0
 const KEY_DOWN = 1; // KEYEVENTF_EXTENDEDKEY
 const KEY_UP = 3;   // ...and KEYEVENTF_KEYUP
 
+const LINUX_MEDIA = {
+  pause: ['playerctl', ['play-pause']],
+  play: ['playerctl', ['play-pause']],
+  next: ['playerctl', ['next']],
+  previous: ['playerctl', ['previous']],
+  volup: ['wpctl', ['set-volume', '@DEFAULT_AUDIO_SINK@', '5%+', '-l', '1.5']],
+  voldown: ['wpctl', ['set-volume', '@DEFAULT_AUDIO_SINK@', '5%-']],
+  mute: ['wpctl', ['set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle']],
+};
+
 async function media(action) {
+  if (LINUX && LINUX_MEDIA[action]) {
+    const [cmd, args] = LINUX_MEDIA[action];
+    return new Promise((resolve) => {
+      execFile(cmd, args, { timeout: 5000 }, (err) => resolve(!err));
+    });
+  }
   if (!WIN || !MEDIA[action]) return false;
   const [key, times] = MEDIA[action];
   return powershell(
