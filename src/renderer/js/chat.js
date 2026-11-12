@@ -156,11 +156,14 @@ function left(ms) {
 }
 // the words that aren't what to look for
 const NOT_SEARCHED = new Set(('stp svp please pls peux tu can you could would puedes pode можешь moi me le la les l mon ma mes '
-  + 'un une des du de d the my a an for of el mi mis o meu minha meus мой мою мои sur dans on in en no na на в pc ordi ordinateur '
-  + 'computer ordenador computador компьютере fichier fichiers dossier dossiers document documents photo photos image images '
+  + 'un une des du de d the my a an for of from into about with all every list show them it el mi mis o meu minha meus мой мою мои '
+  + 'sur dans on in en no na на в pc ordi ordinateur computer ordenador computador компьютере '
+  + 'desktop documents downloads pictures music videos '
+  + 'fichier fichiers dossier dossiers document documents photo photos image images '
   + 'vidéo vidéos video videos file files folder folders archivo archivos carpeta carpetas arquivo arquivos pasta pastas файл '
   + 'файлы папка папку appelé appelée nommé called named llamado chamado qui s appelle est sont is are where où cherche recherche '
   + 'trouve retrouve search find look up busca encuentra procura acha найди поищи где dónde onde google internet web online ligne').split(' '));
+const TR_NOT_SEARCHED = /^(?:dosya\p{L}*|klas[öo]r\p{L}*|belge\p{L}*|indirilen\p{L}*|masa[üu]st\p{L}*|resim\p{L}*|foto\p{L}*|m[üu]zi\p{L}*|video\p{L}*|bilgisayar\p{L}*|listele\p{L}*|g[öo]ster\p{L}*|ara\p{L}*|bul\p{L}*|nerede\p{L}*|bana|olan|t[üu]m|hepsi\p{L}*|i[çc]indeki\p{L}*|m[ıiuü]s[ıiuü]n|musun|l[üu]tfen)$/iu;
 // the kind of file asked for: "mon projet after effect" is a .aep
 const FILE_TYPES = [
   [/after ?effects?/i, ['aep']], [/premi[eè]re/i, ['prproj']], [/photoshop|\bpsd\b/i, ['psd']], [/illustrator/i, ['ai']],
@@ -168,21 +171,25 @@ const FILE_TYPES = [
   [/\bword\b|\bdocx?\b/i, ['docx', 'doc']], [/excel|\bxlsx?\b|tableur|spreadsheet/i, ['xlsx', 'xls', 'csv']],
   [/powerpoint|\bpptx?\b|diapo|slides/i, ['pptx', 'ppt']], [/\bpdf\b/i, ['pdf']],
   [/vid[ée]os?\b|\bmp4\b|\bfilms?\b|v[íi]deo|видео/i, ['mp4', 'mov', 'mkv', 'avi', 'webm']],
-  [/photos?\b|images?\b|\bpng\b|\bjpe?g\b|imagen|imagem|фото/i, ['png', 'jpg', 'jpeg', 'webp', 'heic']],
-  [/musiques?\b|\bmp3\b|\baudio\b|\bsongs?\b|музык/i, ['mp3', 'wav', 'flac', 'm4a', 'ogg']],
-  [/\bzip\b|\barchive|\brar\b|\b7z\b/i, ['zip', 'rar', '7z']],
+  [/photos?\b|images?\b|\bpng\b|\bjpe?g\b|imagen|imagem|фото|foto[ğg]raf|resim/i, ['png', 'jpg', 'jpeg', 'webp', 'heic']],
+  [/musiques?\b|\bmp3\b|\baudio\b|\bsongs?\b|музык|m[üu]zik|[şs]ark[ıi]/i, ['mp3', 'wav', 'flac', 'm4a', 'ogg']],
+  [/\bzip\b|\barchive|\brar\b|\b7z\b|ar[şs]iv/i, ['zip', 'rar', '7z']],
 ];
-const fileTypes = (text) => [...new Set(FILE_TYPES.filter(([re]) => re.test(text)).flatMap(([, exts]) => exts))];
+const fileTypes = (text) => {
+  const known = FILE_TYPES.filter(([re]) => re.test(text)).flatMap(([, exts]) => exts);
+  const dotted = [...text.matchAll(/(?:^|\s)\.([a-z0-9]{2,5})\b/gi)].map((m) => m[1].toLowerCase());
+  return [...new Set([...known, ...dotted])];
+};
 // words that only say what kind of file it is, or what to do with it once found
-const NOT_A_NAME = new Set(('and et y e и it ça ca lo la o open ouvre ouvrir ouvres abre abrir открой show montre affiche '
-  + 'projet projets project projects proyecto projeto проект after effect effects premiere pro photoshop illustrator blender cinema '
+const NOT_A_NAME = new Set(('and et y e и ve it ça ca lo la o open ouvre ouvrir ouvres abre abrir открой aç show montre affiche göster '
+  + 'projet projets project projects proyecto projeto проект proje after effect effects premiere pro photoshop illustrator blender cinema '
   + '4d c4d fl studio ableton word excel powerpoint pdf mp4 mp3 png jpg jpeg zip rar 7z film films musique musiques music song songs '
   + 'audio présentation presentation diapo slides tableur spreadsheet dernier dernière derniers last latest récent récents recent '
-  + 'nouveau new psd docx doc xlsx pptx').split(' '));
+  + 'nouveau new psd docx doc xlsx pptx blend list them').split(' '));
 // "…and open the folder", "…et ouvre-le": what to do with what she found
 const THEN_FOLDER = /(?:ouvre|ouvrir|open|show|montre|abre|abrir|открой|покажи)\s+(?:moi\s+)?(?:le |la |the |its |son |el |a |o )?(?:dossier|folder|carpeta|pasta|папку)/i;
 const THEN_OPEN = /(?:et|and|y|e|и)\s+(?:l['’])?(?:ouvre|open|lance|abre|открой)(?:[- ](?:le|la|les)|\s+(?:it|them|lo|la|o|его|её))?\s*[.!?]*$/i;
-const searched = (text) => text.replace(/^\s*capri[,!:]?\s+/i, '').toLowerCase().split(/[^\p{L}\p{N}.]+/u).filter((w) => w && !NOT_SEARCHED.has(w)).join(' ');
+const searched = (text) => text.replace(/^\s*capri[,!:]?\s+/i, '').toLowerCase().split(/[^\p{L}\p{N}.]+/u).filter((w) => w && !NOT_SEARCHED.has(w) && !TR_NOT_SEARCHED.test(w)).join(' ');
 // a Roblox game by its name: "in my roblox play steal a brain rot", "lance grow a garden sur roblox"
 const ROBLOX_VERB = /(?:^|\s)(?:play|joue(?:r)?(?: à| a)?|lance|launch|start|ouvre|open|mets|go to|va sur|juega(?: a)?|jogue|jogar|запусти|включи)\s+/gi;
 function robloxGame(text) {
@@ -367,6 +374,9 @@ export class Chat {
     const asked = this.agent ? null : this.asked(text);
     if (asked?.kind === 'look') return this.sendLook(text, id);
     if (asked?.kind === 'care') return this.sendCare(asked, id);
+    if (asked?.kind === 'files' || asked?.kind === 'shot' || (asked?.kind === 'pc' && asked.what === 'info')) {
+      return this.sendDirect(asked, id, text);
+    }
     const early = asked && asked.kind !== 'close' ? this.doNow(asked) : null;
     this.bond?.heard(text); // "sorry": she lets it go
     await Promise.race([this.appsReady, new Promise((r) => setTimeout(r, 1500))]);
@@ -436,6 +446,24 @@ export class Chat {
     this.panel.setFace(done?.face || 'aside');
     this.panel.setChatBusy(false);
     if (done?.buttons?.length) this.offer(done, line);
+  }
+
+  // Real-data PC actions (file search, screenshot, system info): executed directly without the
+  // small local LLM so it never hallucinates fake filenames or battery/disk numbers.
+  async sendDirect(asked, id, text) {
+    const done = await this.doNow(asked).catch(() => null);
+    if (this.turn !== id) return;
+    this.turn = 0;
+    this.panel.setChatBusy(false);
+    if (!done?.line) {
+      const line = this.t.failed;
+      this.remember({ role: 'assistant', content: line });
+      this.panel.stream(line, { done: true });
+      this.panel.setFace('aside');
+      return;
+    }
+    this.remember({ role: 'assistant', content: done.line });
+    await this.after('', '…', asked, Promise.resolve(done), text);
   }
 
   // Her buttons for what she found: each click does its part, its line under hers, then its own
@@ -537,7 +565,8 @@ export class Chat {
     if (SEARCH_VERB.test(text) && WEB_WORD.test(text) && searched(text)) return { kind: 'web', query: searched(text) };
     const exts = fileTypes(text);
     if (SEARCH_VERB.test(text) && (FILE_WORD.test(text) || exts.length)) {
-      const query = searched(text).split(' ').filter((w) => w && !NOT_A_NAME.has(w)).join(' ');
+      const extSet = new Set(exts);
+      const query = searched(text).split(' ').filter((w) => w && !NOT_A_NAME.has(w) && !(w.startsWith('.') && extSet.has(w.slice(1)))).join(' ');
       const then = THEN_FOLDER.test(text) ? 'folder' : THEN_OPEN.test(text) ? 'open' : null;
       if (query || exts.length) return { kind: 'files', query, exts, then };
     }

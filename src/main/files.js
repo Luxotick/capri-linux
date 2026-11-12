@@ -6,6 +6,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
 const { app, shell, desktopCapturer, screen } = require('electron');
 const { powershell } = require('./apps');
 
@@ -55,7 +56,7 @@ function walked(terms, exts) {
   const onedrive = process.env.OneDrive;
   if (onedrive) roots.push(onedrive);
   const hits = [];
-  const queue = roots.map((dir) => [dir, 0]);
+  const queue = [...new Set(roots)].map((dir) => [dir, 0]);
   let seen = 0;
   while (queue.length && hits.length < LIMIT * 3 && seen < 40000) {
     const [dir, depth] = queue.shift();
@@ -89,7 +90,7 @@ async function search({ query = '', exts = [] } = {}) {
 }
 
 function listed(paths) {
-  const results = paths.filter((p) => !junk(p)).slice(0, LIMIT).map((p) => {
+  const results = paths.filter((p) => !junk(p)).map((p) => {
     let time = 0;
     try {
       time = fs.statSync(p).mtimeMs;
@@ -97,7 +98,7 @@ function listed(paths) {
       return null; // gone since
     }
     return { path: p, name: path.basename(p), folder: path.basename(path.dirname(p)), time };
-  }).filter(Boolean);
+  }).filter(Boolean).sort((a, b) => b.time - a.time).slice(0, LIMIT);
   for (const r of results) found.add(r.path);
   return results;
 }
@@ -115,16 +116,25 @@ async function open(file, { reveal = false } = {}) {
 
 // A screenshot of the screen she's on, full size, saved in Pictures › Screenshots (made if needed).
 async function screenshot(display) {
+  const dir = path.join(app.getPath('pictures'), 'Screenshots');
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+  const file = path.join(dir, `Capri ${stamp}.png`);
+  if (process.platform === 'linux') {
+    const grimOk = await new Promise((resolve) => {
+      execFile('grim', [file], { timeout: 5000 }, (err) => resolve(!err && fs.existsSync(file)));
+    });
+    if (grimOk) {
+      found.add(file);
+      return { path: file, name: path.basename(file) };
+    }
+  }
   const d = display || screen.getPrimaryDisplay();
   const k = d.scaleFactor || 1;
   const size = { width: Math.round(d.bounds.width * k), height: Math.round(d.bounds.height * k) };
   const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size });
   const src = sources.find((s) => s.display_id === String(d.id)) || sources[0];
   if (!src || src.thumbnail.isEmpty()) throw new Error('no picture of the screen');
-  const dir = path.join(app.getPath('pictures'), 'Screenshots');
-  fs.mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-  const file = path.join(dir, `Capri ${stamp}.png`);
   fs.writeFileSync(file, src.thumbnail.toPNG());
   found.add(file);
   return { path: file, name: path.basename(file) };
